@@ -68,6 +68,7 @@ func NonBlockingWrite(fd int, buf []byte) *tcpip.Error {
 // NonBlockingWrite3 writes up to three byte slices to a file descriptor in a
 // single syscall. It fails if partial data is written.
 func NonBlockingWrite3(fd int, b1, b2, b3 []byte) *tcpip.Error {
+
 	// If the is no second buffer, issue a regular write.
 	if len(b2) == 0 {
 		return NonBlockingWrite(fd, b1)
@@ -94,6 +95,15 @@ func NonBlockingWrite3(fd int, b1, b2, b3 []byte) *tcpip.Error {
 	}
 
 	_, _, e := syscall.RawSyscall(syscall.SYS_WRITEV, uintptr(fd), uintptr(unsafe.Pointer(&iovec[0])), iovecLen)
+	if e != 0 {
+		return TranslateErrno(e)
+	}
+
+	return nil
+}
+
+func NonBlockingSendMMsg(fd int, msgHdrs []MMsgHdr) *tcpip.Error {
+	_, _, e := syscall.RawSyscall6(307 /* sendmmsg */, uintptr(fd), uintptr(unsafe.Pointer(&msgHdrs[0])), uintptr(len(msgHdrs)), syscall.MSG_DONTWAIT, 0, 0)
 	if e != 0 {
 		return TranslateErrno(e)
 	}

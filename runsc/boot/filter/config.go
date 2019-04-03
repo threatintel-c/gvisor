@@ -232,11 +232,12 @@ var allowedSyscalls = seccomp.SyscallRules{
 			seccomp.AllowValue(0),
 		},
 	},
-	syscall.SYS_RESTART_SYSCALL: {},
-	syscall.SYS_RT_SIGACTION:    {},
-	syscall.SYS_RT_SIGPROCMASK:  {},
-	syscall.SYS_RT_SIGRETURN:    {},
-	syscall.SYS_SCHED_YIELD:     {},
+	307 /* syscall.SYS_SENDMMSG */ : []seccomp.Rule{},
+	syscall.SYS_RESTART_SYSCALL:     {},
+	syscall.SYS_RT_SIGACTION:        {},
+	syscall.SYS_RT_SIGPROCMASK:      {},
+	syscall.SYS_RT_SIGRETURN:        {},
+	syscall.SYS_SCHED_YIELD:         {},
 	syscall.SYS_SENDMSG: []seccomp.Rule{
 		{
 			seccomp.AllowAny{},

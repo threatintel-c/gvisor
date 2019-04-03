@@ -69,6 +69,43 @@ func ChecksumVV(vv buffer.VectorisedView, initial uint16) uint16 {
 	return sum
 }
 
+// ChecksumVVWithOffset calculates the checksum (as defined in RFC 1071) of the
+// bytes in the given VectorizedView.
+//
+// The initial checksum must have been computed on an even number of bytes.
+func ChecksumVVWithOffset(vv buffer.VectorisedView, initial uint16, off int, size int) uint16 {
+	var odd bool
+	sum := initial
+	for _, v := range vv.Views() {
+		if len(v) == 0 {
+			continue
+		}
+		if off > len(v) {
+			off -= len(v)
+			continue
+		}
+		end := len(v)
+		if end > off+size {
+			end = off + size
+		}
+		v = v[off:end]
+		s := uint32(sum)
+		if odd {
+			s += uint32(v[0])
+			v = v[1:]
+		}
+		odd = len(v)&1 != 0
+		sum = calculateChecksum(v, s)
+
+		size -= end - off
+		off = 0
+		if size == 0 {
+			break
+		}
+	}
+	return sum
+}
+
 // ChecksumCombine combines the two uint16 to form their checksum. This is done
 // by adding them and the carry.
 //

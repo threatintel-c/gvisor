@@ -25,6 +25,8 @@ type Prependable struct {
 
 	// usedIdx is the index where the used part of the buffer begins.
 	usedIdx int
+
+	Next *Prependable
 }
 
 // NewPrependable allocates a new prependable buffer with the given size.

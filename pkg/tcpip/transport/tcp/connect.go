@@ -584,46 +584,75 @@ func sendSynTCP(r *stack.Route, id stack.TransportEndpointID, flags byte, seq, a
 // network endpoint and under the provided identity.
 func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.VectorisedView, ttl uint8, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte, gso *stack.GSO) *tcpip.Error {
 	optLen := len(opts)
-	// Allocate a buffer for the TCP header.
-	hdr := buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen)
-
 	if rcvWnd > 0xffff {
 		rcvWnd = 0xffff
 	}
 
-	// Initialize the header.
-	tcp := header.TCP(hdr.Prepend(header.TCPMinimumSize + optLen))
-	tcp.Encode(&header.TCPFields{
-		SrcPort:    id.LocalPort,
-		DstPort:    id.RemotePort,
-		SeqNum:     uint32(seq),
-		AckNum:     uint32(ack),
-		DataOffset: uint8(header.TCPMinimumSize + optLen),
-		Flags:      flags,
-		WindowSize: uint16(rcvWnd),
-	})
-	copy(tcp[header.TCPMinimumSize:], opts)
-
-	length := uint16(hdr.UsedLength() + data.Size())
-	xsum := r.PseudoHeaderChecksum(ProtocolNumber, length)
-	// Only calculate the checksum if offloading isn't supported.
-	if gso != nil && gso.NeedsCsum {
-		// This is called CHECKSUM_PARTIAL in the Linux kernel. We
-		// calculate a checksum of the pseudo-header and save it in the
-		// TCP header, then the kernel calculate a checksum of the
-		// header and data and get the right sum of the TCP packet.
-		tcp.SetChecksum(xsum)
-	} else if r.Capabilities()&stack.CapabilityTXChecksumOffload == 0 {
-		xsum = header.ChecksumVV(data, xsum)
-		tcp.SetChecksum(^tcp.CalculateChecksum(xsum))
+	mss := data.Size()
+	n := 1
+	if r.Loop&stack.PacketLoop == 0 && gso != nil && gso.Type == stack.GSOSW && gso.MSS != 0 {
+		mss = int(gso.MSS)
+		n = (data.Size() + mss - 1) / mss
+		if n == 0 {
+			n = 1
+		}
 	}
 
-	r.Stats().TCP.SegmentsSent.Increment()
-	if (flags & header.TCPFlagRst) != 0 {
-		r.Stats().TCP.ResetsSent.Increment()
+	firstHdr := buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen)
+	hdr := &firstHdr
+
+	prevHdr := hdr
+	size := data.Size()
+	off := 0
+	for i := 0; i < n; i++ {
+		packetSize := mss
+		if packetSize > size {
+			packetSize = size
+		}
+		size -= packetSize
+		if hdr == nil {
+			h := buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen)
+			hdr = &h
+			prevHdr.Next = hdr
+		}
+		// Initialize the header.
+		tcp := header.TCP(hdr.Prepend(header.TCPMinimumSize + optLen))
+		tcp.Encode(&header.TCPFields{
+			SrcPort:    id.LocalPort,
+			DstPort:    id.RemotePort,
+			SeqNum:     uint32(seq),
+			AckNum:     uint32(ack),
+			DataOffset: uint8(header.TCPMinimumSize + optLen),
+			Flags:      flags,
+			WindowSize: uint16(rcvWnd),
+		})
+		copy(tcp[header.TCPMinimumSize:], opts)
+
+		length := uint16(hdr.UsedLength() + packetSize)
+		xsum := r.PseudoHeaderChecksum(ProtocolNumber, length)
+		// Only calculate the checksum if offloading isn't supported.
+		if gso != nil && gso.NeedsCsum {
+			// This is called CHECKSUM_PARTIAL in the Linux kernel. We
+			// calculate a checksum of the pseudo-header and save it in the
+			// TCP header, then the kernel calculate a checksum of the
+			// header and data and get the right sum of the TCP packet.
+			tcp.SetChecksum(xsum)
+		} else if r.Capabilities()&stack.CapabilityTXChecksumOffload == 0 {
+			xsum = header.ChecksumVVWithOffset(data, xsum, off, packetSize)
+			tcp.SetChecksum(^tcp.CalculateChecksum(xsum))
+		}
+
+		r.Stats().TCP.SegmentsSent.Increment()
+		if (flags & header.TCPFlagRst) != 0 {
+			r.Stats().TCP.ResetsSent.Increment()
+		}
+		off += packetSize
+		seq = seq.Add(seqnum.Size(packetSize))
+		prevHdr = hdr
+		hdr = nil
 	}
 
-	return r.WritePacket(gso, hdr, data, ProtocolNumber, ttl)
+	return r.WritePacket(gso, firstHdr, data, ProtocolNumber, ttl)
 }
 
 // makeOptions makes an options slice.

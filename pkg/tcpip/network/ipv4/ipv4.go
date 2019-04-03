@@ -190,29 +190,45 @@ func (e *endpoint) writePacketFragments(r *stack.Route, gso *stack.GSO, hdr buff
 }
 
 // WritePacket writes a packet to the given destination address and protocol.
-func (e *endpoint) WritePacket(r *stack.Route, gso *stack.GSO, hdr buffer.Prependable, payload buffer.VectorisedView, protocol tcpip.TransportProtocolNumber, ttl uint8, loop stack.PacketLooping) *tcpip.Error {
-	ip := header.IPv4(hdr.Prepend(header.IPv4MinimumSize))
-	length := uint16(hdr.UsedLength() + payload.Size())
-	id := uint32(0)
-	if length > header.IPv4MaximumHeaderSize+8 {
-		// Packets of 68 bytes or less are required by RFC 791 to not be
-		// fragmented, so we only assign ids to larger packets.
-		id = atomic.AddUint32(&ids[hashRoute(r, protocol)%buckets], 1)
+func (e *endpoint) WritePacket(r *stack.Route, gso *stack.GSO, vhdr buffer.Prependable, payload buffer.VectorisedView, protocol tcpip.TransportProtocolNumber, ttl uint8, loop stack.PacketLooping) *tcpip.Error {
+	mss := payload.Size()
+	if loop&stack.PacketLoop == 0 && r.Capabilities()&stack.CapabilitySWGSO != 0 && gso != nil {
+		mss = int(gso.MSS)
 	}
-	ip.Encode(&header.IPv4Fields{
-		IHL:         header.IPv4MinimumSize,
-		TotalLength: length,
-		ID:          uint16(id),
-		TTL:         ttl,
-		Protocol:    uint8(protocol),
-		SrcAddr:     r.LocalAddress,
-		DstAddr:     r.RemoteAddress,
-	})
-	ip.SetChecksum(^ip.CalculateChecksum())
+	size := payload.Size()
+	hdr := &vhdr
+	for ; hdr != nil; hdr = hdr.Next {
+		packetSize := mss
+		if packetSize > size {
+			packetSize = size
+		}
+		size -= packetSize
 
+		ip := header.IPv4(hdr.Prepend(header.IPv4MinimumSize))
+		length := uint16(hdr.UsedLength() + packetSize)
+		id := uint32(0)
+		if length > header.IPv4MaximumHeaderSize+8 {
+			// Packets of 68 bytes or less are required by RFC 791 to not be
+			// fragmented, so we only assign ids to larger packets.
+			id = atomic.AddUint32(&ids[hashRoute(r, protocol)%buckets], 1)
+		}
+		ip.Encode(&header.IPv4Fields{
+			IHL:         header.IPv4MinimumSize,
+			TotalLength: length,
+			ID:          uint16(id),
+			TTL:         ttl,
+			Protocol:    uint8(protocol),
+			SrcAddr:     r.LocalAddress,
+			DstAddr:     r.RemoteAddress,
+		})
+		ip.SetChecksum(^ip.CalculateChecksum())
+	}
 	if loop&stack.PacketLoop != 0 {
+		if vhdr.Next != nil {
+			panic("gso packet in local loop")
+		}
 		views := make([]buffer.View, 1, 1+len(payload.Views()))
-		views[0] = hdr.View()
+		views[0] = vhdr.View()
 		views = append(views, payload.Views()...)
 		vv := buffer.NewVectorisedView(len(views[0])+payload.Size(), views)
 		loopedR := r.MakeLoopedRoute()
@@ -222,13 +238,13 @@ func (e *endpoint) WritePacket(r *stack.Route, gso *stack.GSO, hdr buffer.Prepen
 	if loop&stack.PacketOut == 0 {
 		return nil
 	}
-	if hdr.UsedLength()+payload.Size() > int(e.linkEP.MTU()) && (gso == nil || gso.Type == stack.GSONone) {
-		return e.writePacketFragments(r, gso, hdr, payload, int(e.linkEP.MTU()))
+	if vhdr.UsedLength()+payload.Size() > int(e.linkEP.MTU()) && (gso == nil || gso.Type == stack.GSONone) {
+		return e.writePacketFragments(r, gso, vhdr, payload, int(e.linkEP.MTU()))
 	}
-	if err := e.linkEP.WritePacket(r, gso, hdr, payload, ProtocolNumber); err != nil {
+	if err := e.linkEP.WritePacket(r, gso, vhdr, payload, ProtocolNumber); err != nil {
 		return err
 	}
-	r.Stats().IP.PacketsSent.Increment()
+	r.Stats().IP.PacketsSent.Increment() //FIXME
 	return nil
 }
 

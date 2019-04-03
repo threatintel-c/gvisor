@@ -1719,23 +1719,28 @@ func (e *endpoint) completeState() stack.TCPEndpointState {
 }
 
 func (e *endpoint) initGSO() {
-	if e.route.Capabilities()&stack.CapabilityGSO == 0 {
-		return
+	if e.route.Capabilities()&stack.CapabilityHWGSO != 0 {
+		gso := &stack.GSO{}
+		switch e.route.NetProto {
+		case header.IPv4ProtocolNumber:
+			gso.Type = stack.GSOTCPv4
+			gso.L3HdrLen = header.IPv4MinimumSize
+		case header.IPv6ProtocolNumber:
+			gso.Type = stack.GSOTCPv6
+			gso.L3HdrLen = header.IPv6MinimumSize
+		default:
+			panic(fmt.Sprintf("Unknown netProto: %v", e.netProto))
+		}
+		gso.NeedsCsum = true
+		gso.CsumOffset = header.TCPChecksumOffset
+		gso.MaxSize = e.route.GSOMaxSize()
+		e.gso = gso
+	} else if e.route.Capabilities()&stack.CapabilitySWGSO != 0 {
+		e.gso = &stack.GSO{
+			MaxSize:   e.route.GSOMaxSize(),
+			Type:      stack.GSOSW,
+			NeedsCsum: false,
+		}
 	}
-
-	gso := &stack.GSO{}
-	switch e.route.NetProto {
-	case header.IPv4ProtocolNumber:
-		gso.Type = stack.GSOTCPv4
-		gso.L3HdrLen = header.IPv4MinimumSize
-	case header.IPv6ProtocolNumber:
-		gso.Type = stack.GSOTCPv6
-		gso.L3HdrLen = header.IPv6MinimumSize
-	default:
-		panic(fmt.Sprintf("Unknown netProto: %v", e.netProto))
-	}
-	gso.NeedsCsum = true
-	gso.CsumOffset = header.TCPChecksumOffset
-	gso.MaxSize = e.route.GSOMaxSize()
-	e.gso = gso
+	return
 }

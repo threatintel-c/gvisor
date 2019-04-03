@@ -261,6 +261,9 @@ func createInterfacesAndRoutesFromNS(conn *urpc.Client, nsPath string, enableGSO
 			} else {
 				log.Infof("GSO not available in host.")
 			}
+		} else {
+			link.GSOMaxSize = 1 << 16
+			link.SWGSO = true
 		}
 
 		// Use SO_RCVBUFFORCE because on linux the receive buffer for an

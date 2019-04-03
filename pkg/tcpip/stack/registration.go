@@ -245,8 +245,11 @@ const (
 	CapabilitySaveRestore
 	CapabilityDisconnectOk
 	CapabilityLoopback
-	CapabilityGSO
+	CapabilityHWGSO
+	CapabilitySWGSO
 )
+
+var CapabilityGSO = CapabilityHWGSO | CapabilitySWGSO
 
 // LinkEndpoint is the interface implemented by data link layer protocols (e.g.,
 // ethernet, loopback, raw) and used by network layer protocols to send packets
@@ -412,6 +415,7 @@ const (
 	GSONone GSOType = iota
 	GSOTCPv4
 	GSOTCPv6
+	GSOSW
 )
 
 // GSO contains generic segmentation offload properties.
