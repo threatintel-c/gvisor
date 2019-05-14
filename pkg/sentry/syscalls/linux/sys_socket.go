@@ -29,6 +29,7 @@ import (
 	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/control"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/usermem"
+	"gvisor.googlesource.com/gvisor/pkg/syserr"
 	"gvisor.googlesource.com/gvisor/pkg/syserror"
 )
 
@@ -60,6 +61,8 @@ const controlLenOffset = 40
 // flagsOffset is the offset form the start of the MessageHeader64 struct
 // to the Flags field.
 const flagsOffset = 48
+
+const sizeOfInt32 int = 4
 
 // messageHeader64Len is the length of a MessageHeader64 struct.
 var messageHeader64Len = uint64(binary.Size(MessageHeader64{}))
@@ -188,7 +191,7 @@ func Socket(t *kernel.Task, args arch.SyscallArguments) (uintptr, *kernel.Syscal
 	}
 
 	// Create the new socket.
-	s, e := socket.New(t, domain, transport.SockType(stype&0xf), protocol)
+	s, e := socket.New(t, domain, linux.SockType(stype&0xf), protocol)
 	if e != nil {
 		return 0, nil, e.ToError()
 	}
@@ -227,7 +230,7 @@ func SocketPair(t *kernel.Task, args arch.SyscallArguments) (uintptr, *kernel.Sy
 	}
 
 	// Create the socket pair.
-	s1, s2, e := socket.Pair(t, domain, transport.SockType(stype&0xf), protocol)
+	s1, s2, e := socket.Pair(t, domain, linux.SockType(stype&0xf), protocol)
 	if e != nil {
 		return 0, nil, e.ToError()
 	}
@@ -466,7 +469,7 @@ func GetSockOpt(t *kernel.Task, args arch.SyscallArguments) (uintptr, *kernel.Sy
 	}
 
 	// Call syscall implementation then copy both value and value len out.
-	v, e := s.GetSockOpt(t, int(level), int(name), int(optLen))
+	v, e := getSockOpt(t, s, int(level), int(name), int(optLen))
 	if e != nil {
 		return 0, nil, e.ToError()
 	}
@@ -485,6 +488,33 @@ func GetSockOpt(t *kernel.Task, args arch.SyscallArguments) (uintptr, *kernel.Sy
 	}
 
 	return 0, nil, nil
+}
+
+// getSockOpt tries to handle common socket options, or dispatches to a specific
+// socket implementation.
+func getSockOpt(t *kernel.Task, s socket.Socket, level, name, len int) (interface{}, *syserr.Error) {
+	if level == linux.SOL_SOCKET {
+		switch name {
+		case linux.SO_TYPE, linux.SO_DOMAIN, linux.SO_PROTOCOL:
+			if len < sizeOfInt32 {
+				return nil, syserr.ErrInvalidArgument
+			}
+		}
+
+		switch name {
+		case linux.SO_TYPE:
+			_, skType, _ := s.Type()
+			return int32(skType), nil
+		case linux.SO_DOMAIN:
+			family, _, _ := s.Type()
+			return int32(family), nil
+		case linux.SO_PROTOCOL:
+			_, _, protocol := s.Type()
+			return int32(protocol), nil
+		}
+	}
+
+	return s.GetSockOpt(t, level, name, len)
 }
 
 // SetSockOpt implements the linux syscall setsockopt(2).
