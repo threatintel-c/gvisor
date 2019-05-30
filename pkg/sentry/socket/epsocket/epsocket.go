@@ -44,7 +44,6 @@ import (
 	ktime "gvisor.googlesource.com/gvisor/pkg/sentry/kernel/time"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/safemem"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/socket"
-	"gvisor.googlesource.com/gvisor/pkg/sentry/socket/unix/transport"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/unimpl"
 	"gvisor.googlesource.com/gvisor/pkg/sentry/usermem"
 	"gvisor.googlesource.com/gvisor/pkg/syserr"
@@ -52,6 +51,7 @@ import (
 	"gvisor.googlesource.com/gvisor/pkg/tcpip"
 	"gvisor.googlesource.com/gvisor/pkg/tcpip/buffer"
 	"gvisor.googlesource.com/gvisor/pkg/tcpip/stack"
+	"gvisor.googlesource.com/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.googlesource.com/gvisor/pkg/waiter"
 )
 
@@ -227,7 +227,7 @@ type SocketOperations struct {
 
 	family   int
 	Endpoint tcpip.Endpoint
-	skType   transport.SockType
+	skType   linux.SockType
 
 	// readMu protects access to the below fields.
 	readMu sync.Mutex `state:"nosave"`
@@ -252,8 +252,8 @@ type SocketOperations struct {
 }
 
 // New creates a new endpoint socket.
-func New(t *kernel.Task, family int, skType transport.SockType, queue *waiter.Queue, endpoint tcpip.Endpoint) (*fs.File, *syserr.Error) {
-	if skType == transport.SockStream {
+func New(t *kernel.Task, family int, skType linux.SockType, queue *waiter.Queue, endpoint tcpip.Endpoint) (*fs.File, *syserr.Error) {
+	if skType == linux.SOCK_STREAM {
 		if err := endpoint.SetSockOpt(tcpip.DelayOption(1)); err != nil {
 			return nil, syserr.TranslateNetstackError(err)
 		}
@@ -637,7 +637,7 @@ func (s *SocketOperations) GetSockOpt(t *kernel.Task, level, name, outLen int) (
 
 // GetSockOpt can be used to implement the linux syscall getsockopt(2) for
 // sockets backed by a commonEndpoint.
-func GetSockOpt(t *kernel.Task, s socket.Socket, ep commonEndpoint, family int, skType transport.SockType, level, name, outLen int) (interface{}, *syserr.Error) {
+func GetSockOpt(t *kernel.Task, s socket.Socket, ep commonEndpoint, family int, skType linux.SockType, level, name, outLen int) (interface{}, *syserr.Error) {
 	switch level {
 	case linux.SOL_SOCKET:
 		return getSockOptSocket(t, s, ep, family, skType, name, outLen)
@@ -663,7 +663,7 @@ func GetSockOpt(t *kernel.Task, s socket.Socket, ep commonEndpoint, family int, 
 }
 
 // getSockOptSocket implements GetSockOpt when level is SOL_SOCKET.
-func getSockOptSocket(t *kernel.Task, s socket.Socket, ep commonEndpoint, family int, skType transport.SockType, name, outLen int) (interface{}, *syserr.Error) {
+func getSockOptSocket(t *kernel.Task, s socket.Socket, ep commonEndpoint, family int, skType linux.SockType, name, outLen int) (interface{}, *syserr.Error) {
 	// TODO(b/124056281): Stop rejecting short optLen values in getsockopt.
 	switch name {
 	case linux.SO_TYPE:
@@ -2280,4 +2280,47 @@ func nicStateFlagsToLinux(f stack.NICStateFlags) uint32 {
 		rv |= linux.IFF_LOOPBACK
 	}
 	return rv
+}
+
+// State implements socket.Socket.State. State translates the internal state
+// returned by netstack to values defined by Linux.
+func (s *SocketOperations) State() uint32 {
+	if s.family != linux.AF_INET && s.family != linux.AF_INET6 {
+		// States not implemented for this socket's family.
+		return 0
+	}
+
+	if !s.isPacketBased() {
+		// TCP socket.
+		switch tcp.EndpointState(s.Endpoint.State()) {
+		case tcp.StateEstablished:
+			return linux.TCP_ESTABLISHED
+		case tcp.StateSynSent:
+			return linux.TCP_SYN_SENT
+		case tcp.StateSynRecv:
+			return linux.TCP_SYN_RECV
+		case tcp.StateFinWait1:
+			return linux.TCP_FIN_WAIT1
+		case tcp.StateFinWait2:
+			return linux.TCP_FIN_WAIT2
+		case tcp.StateTimeWait:
+			return linux.TCP_TIME_WAIT
+		case tcp.StateClose, tcp.StateInitial, tcp.StateBound, tcp.StateConnecting, tcp.StateError:
+			return linux.TCP_CLOSE
+		case tcp.StateCloseWait:
+			return linux.TCP_CLOSE_WAIT
+		case tcp.StateLastAck:
+			return linux.TCP_LAST_ACK
+		case tcp.StateListen:
+			return linux.TCP_LISTEN
+		case tcp.StateClosing:
+			return linux.TCP_CLOSING
+		default:
+			// Internal or unknown state.
+			return 0
+		}
+	}
+
+	// TODO(b/112063468): Export states for UDP, ICMP, and raw sockets.
+	return 0
 }

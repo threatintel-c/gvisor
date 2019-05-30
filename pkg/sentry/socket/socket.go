@@ -116,6 +116,10 @@ type Socket interface {
 	// SendTimeout gets the current timeout (in ns) for send operations. Zero
 	// means no timeout, and negative means DONTWAIT.
 	SendTimeout() int64
+
+	// State returns the current state of the socket, as represented by Linux in
+	// procfs. The returned state value is protocol-specific.
+	State() uint32
 }
 
 // Provider is the interface implemented by providers of sockets for specific
@@ -126,12 +130,12 @@ type Provider interface {
 	// If a nil Socket _and_ a nil error is returned, it means that the
 	// protocol is not supported. A non-nil error should only be returned
 	// if the protocol is supported, but an error occurs during creation.
-	Socket(t *kernel.Task, stype transport.SockType, protocol int) (*fs.File, *syserr.Error)
+	Socket(t *kernel.Task, stype linux.SockType, protocol int) (*fs.File, *syserr.Error)
 
 	// Pair creates a pair of connected sockets.
 	//
 	// See Socket for error information.
-	Pair(t *kernel.Task, stype transport.SockType, protocol int) (*fs.File, *fs.File, *syserr.Error)
+	Pair(t *kernel.Task, stype linux.SockType, protocol int) (*fs.File, *fs.File, *syserr.Error)
 }
 
 // families holds a map of all known address families and their providers.
@@ -145,7 +149,7 @@ func RegisterProvider(family int, provider Provider) {
 }
 
 // New creates a new socket with the given family, type and protocol.
-func New(t *kernel.Task, family int, stype transport.SockType, protocol int) (*fs.File, *syserr.Error) {
+func New(t *kernel.Task, family int, stype linux.SockType, protocol int) (*fs.File, *syserr.Error) {
 	for _, p := range families[family] {
 		s, err := p.Socket(t, stype, protocol)
 		if err != nil {
@@ -162,7 +166,7 @@ func New(t *kernel.Task, family int, stype transport.SockType, protocol int) (*f
 
 // Pair creates a new connected socket pair with the given family, type and
 // protocol.
-func Pair(t *kernel.Task, family int, stype transport.SockType, protocol int) (*fs.File, *fs.File, *syserr.Error) {
+func Pair(t *kernel.Task, family int, stype linux.SockType, protocol int) (*fs.File, *fs.File, *syserr.Error) {
 	providers, ok := families[family]
 	if !ok {
 		return nil, nil, syserr.ErrAddressFamilyNotSupported
