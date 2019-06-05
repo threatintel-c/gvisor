@@ -23,6 +23,10 @@ go_test(
 
 go_library(
     name = "integration",
-    srcs = ["integration.go"],
+    srcs = [
+        "integration.go",
+        "regression.go",
+    ],
     importpath = "gvisor.googlesource.com/gvisor/runsc/test/integration",
+    deps = ["//runsc/test/testutil"],
 )
