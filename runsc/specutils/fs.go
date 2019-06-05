@@ -16,6 +16,7 @@ package specutils
 
 import (
 	"fmt"
+	"math/bits"
 	"path"
 	"syscall"
 
@@ -110,17 +111,24 @@ func validateMount(mnt *specs.Mount) error {
 	if !path.IsAbs(mnt.Destination) {
 		return fmt.Errorf("Mount.Destination must be an absolute path: %v", mnt)
 	}
-
 	if mnt.Type == "bind" {
-		for _, o := range mnt.Options {
-			if ContainsStr(invalidOptions, o) {
-				return fmt.Errorf("mount option %q is not supported: %v", o, mnt)
-			}
-			_, ok1 := optionsMap[o]
-			_, ok2 := propOptionsMap[o]
-			if !ok1 && !ok2 {
-				return fmt.Errorf("unknown mount option %q", o)
-			}
+		return ValidateMountOptions(mnt.Options)
+	}
+	return nil
+}
+
+func ValidateMountOptions(opts []string) error {
+	for _, o := range opts {
+		if ContainsStr(invalidOptions, o) {
+			return fmt.Errorf("mount option %q is not supported", o)
+		}
+		_, ok1 := optionsMap[o]
+		_, ok2 := propOptionsMap[o]
+		if !ok1 && !ok2 {
+			return fmt.Errorf("unknown mount option %q", o)
+		}
+		if err := validatePropagation(o); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -132,6 +140,15 @@ func validateRootfsPropagation(opt string) error {
 	flags := PropOptionsToFlags([]string{opt})
 	if flags&(syscall.MS_SLAVE|syscall.MS_PRIVATE) == 0 {
 		return fmt.Errorf("root mount propagation option must specify private or slave: %q", opt)
+	}
+	return validatePropagation(opt)
+}
+
+func validatePropagation(opt string) error {
+	flags := PropOptionsToFlags([]string{opt})
+	exclusive := flags & (syscall.MS_SLAVE | syscall.MS_PRIVATE | syscall.MS_SHARED | syscall.MS_UNBINDABLE)
+	if bits.OnesCount32(exclusive) > 1 {
+		return fmt.Errorf("mount propagation options are mutually exclusive: %q", opt)
 	}
 	return nil
 }
